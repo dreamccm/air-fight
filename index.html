@@ -6,6 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#05081a">
 <title>슈퍼 전투기 대작전</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9C%88%EF%B8%8F%3C/text%3E%3C/svg%3E">
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html, body {
@@ -96,6 +97,12 @@
     background:rgba(255,255,255,.14); color:#fff; font-size:18px; cursor:pointer;
   }
   #pauseBtn.hidden { display:none; }
+  #soundBtn {
+    position:absolute; top:calc(10px + env(safe-area-inset-top)); right:64px; z-index:20;
+    width:44px; height:44px; border-radius:12px; border:none;
+    background:rgba(255,255,255,.14); color:#fff; font-size:18px; cursor:pointer;
+  }
+  #soundBtn.off { opacity:.5; }
   .fade { animation:fade .25s ease-out; }
   @keyframes fade { from { opacity:0; transform:translateY(10px);} to { opacity:1; transform:none;} }
 </style>
@@ -105,6 +112,7 @@
   <canvas id="game"></canvas>
 
   <button id="pauseBtn" class="hidden">❚❚</button>
+  <button id="soundBtn" title="소리 켜기/끄기">🔊</button>
 
   <div id="startScreen" class="screen">
     <div class="title">슈퍼 전투기<br>대작전</div>
@@ -176,21 +184,203 @@ resize();
 const rand = (a, b) => a + Math.random() * (b - a);
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 
-// ---------------------------------------------------------------- 사운드 (간단한 합성음)
-let audioCtx = null;
+// ---------------------------------------------------------------- 사운드
+// 음원 파일 없이 Web Audio 로 직접 만들어 쓴다. 효과음과 배경음악의 볼륨을
+// 따로 두고, 브라우저 정책에 맞춰 첫 조작 때 오디오를 깨운다.
+let actx = null, masterGain = null, sfxGain = null, musicGain = null, noiseBuf = null;
 let soundOn = true;
-function beep(freq, dur, type = "square", vol = 0.05) {
-  if (!soundOn) return;
+try { soundOn = localStorage.getItem("af_sound") !== "0"; } catch (e) {}
+
+function initAudio() {
+  if (actx) return true;
   try {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === "suspended") audioCtx.resume();
-    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-    o.type = type; o.frequency.value = freq;
-    g.gain.setValueAtTime(vol, audioCtx.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + dur);
-    o.connect(g); g.connect(audioCtx.destination);
-    o.start(); o.stop(audioCtx.currentTime + dur);
-  } catch (e) { /* 사운드 실패는 무시 */ }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return false;
+    actx = new AC();
+    masterGain = actx.createGain();
+    masterGain.gain.value = soundOn ? 1 : 0;
+    masterGain.connect(actx.destination);
+
+    sfxGain = actx.createGain();
+    sfxGain.gain.value = 0.9;
+    sfxGain.connect(masterGain);
+
+    musicGain = actx.createGain();
+    musicGain.gain.value = 0;          // 음악은 재생 시작할 때 서서히 올린다
+    musicGain.connect(masterGain);
+
+    // 폭발음·하이햇용 화이트 노이즈
+    noiseBuf = actx.createBuffer(1, actx.sampleRate, actx.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    return true;
+  } catch (e) { actx = null; return false; }
+}
+
+function resumeAudio() {
+  if (!initAudio()) return;
+  if (actx.state === "suspended") actx.resume();
+}
+
+/** 한 음 재생. dest 를 주면 그쪽으로 (음악은 musicGain) 보낸다. */
+function tone(o = {}) {
+  if (!actx) return;
+  const t0 = o.time ?? actx.currentTime;
+  const dur = o.dur ?? 0.15;
+  const osc = actx.createOscillator();
+  const g = actx.createGain();
+  osc.type = o.type || "square";
+  osc.frequency.setValueAtTime(o.freq, t0);
+  if (o.slideTo) osc.frequency.exponentialRampToValueAtTime(Math.max(20, o.slideTo), t0 + dur);
+
+  const vol = o.vol ?? 0.05;
+  const atk = o.attack ?? 0.005;
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(vol, t0 + atk);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+
+  osc.connect(g);
+  g.connect(o.dest || sfxGain);
+  osc.start(t0);
+  osc.stop(t0 + dur + 0.02);
+}
+
+/** 노이즈 한 방 (폭발, 하이햇, 스네어) */
+function noise(o = {}) {
+  if (!actx || !noiseBuf) return;
+  const t0 = o.time ?? actx.currentTime;
+  const dur = o.dur ?? 0.2;
+  const src = actx.createBufferSource();
+  src.buffer = noiseBuf;
+  const filter = actx.createBiquadFilter();
+  filter.type = o.filter || "lowpass";
+  filter.frequency.setValueAtTime(o.freq ?? 1200, t0);
+  if (o.freqTo) filter.frequency.exponentialRampToValueAtTime(Math.max(60, o.freqTo), t0 + dur);
+  const g = actx.createGain();
+  g.gain.setValueAtTime(o.vol ?? 0.08, t0);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  src.connect(filter); filter.connect(g); g.connect(o.dest || sfxGain);
+  src.start(t0);
+  src.stop(t0 + dur + 0.02);
+}
+
+// --- 효과음 모음
+const SFX = {
+  shoot:    () => tone({ freq: 1250, slideTo: 780, dur: 0.06, type: "square",   vol: 0.022 }),
+  hit:      () => tone({ freq: 520,  slideTo: 300, dur: 0.05, type: "square",   vol: 0.02 }),
+  boom:     () => { noise({ freq: 1800, freqTo: 120, dur: 0.32, vol: 0.09 });
+                    tone({ freq: 180, slideTo: 60, dur: 0.28, type: "triangle", vol: 0.05 }); },
+  bigBoom:  () => { noise({ freq: 2400, freqTo: 80, dur: 0.7, vol: 0.13 });
+                    tone({ freq: 140, slideTo: 40, dur: 0.6, type: "sawtooth",  vol: 0.07 }); },
+  enemyFire:() => tone({ freq: 300, slideTo: 180, dur: 0.09, type: "sawtooth",  vol: 0.022 }),
+  heal:     () => [523, 659, 784].forEach((f, i) => tone({ freq: f, dur: 0.14, type: "sine", vol: 0.05, time: actx.currentTime + i * 0.06 })),
+  power:    () => [659, 880, 1175].forEach((f, i) => tone({ freq: f, dur: 0.13, type: "square", vol: 0.035, time: actx.currentTime + i * 0.05 })),
+  shield:   () => { tone({ freq: 440, slideTo: 880, dur: 0.3, type: "sine", vol: 0.05 });
+                    tone({ freq: 660, dur: 0.3, type: "sine", vol: 0.03 }); },
+  bombGet:  () => [392, 523].forEach((f, i) => tone({ freq: f, dur: 0.16, type: "triangle", vol: 0.05, time: actx.currentTime + i * 0.07 })),
+  bombUse:  () => { noise({ freq: 3000, freqTo: 100, dur: 0.9, vol: 0.14 });
+                    tone({ freq: 220, slideTo: 30, dur: 0.8, type: "sawtooth", vol: 0.08 }); },
+  damage:   () => { tone({ freq: 300, slideTo: 90, dur: 0.3, type: "sawtooth", vol: 0.07 });
+                    noise({ freq: 800, freqTo: 100, dur: 0.25, vol: 0.06 }); },
+  guard:    () => tone({ freq: 900, slideTo: 500, dur: 0.25, type: "triangle", vol: 0.055 }),
+  levelUp:  () => [523, 659, 784, 1047].forEach((f, i) => tone({ freq: f, dur: 0.18, type: "square", vol: 0.04, time: actx.currentTime + i * 0.08 })),
+  bossWarn: () => [110, 110, 98].forEach((f, i) => tone({ freq: f, dur: 0.35, type: "sawtooth", vol: 0.075, time: actx.currentTime + i * 0.22 })),
+  start:    () => [523, 784, 1047].forEach((f, i) => tone({ freq: f, dur: 0.16, type: "square", vol: 0.045, time: actx.currentTime + i * 0.09 })),
+  save:     () => [784, 988, 1319].forEach((f, i) => tone({ freq: f, dur: 0.2, type: "sine", vol: 0.05, time: actx.currentTime + i * 0.08 })),
+  gameOver: () => [523, 440, 349, 262].forEach((f, i) => tone({ freq: f, dur: 0.45, type: "triangle", vol: 0.06, time: actx.currentTime + i * 0.18 })),
+};
+
+function sfx(name) {
+  if (!soundOn || !actx) return;
+  try { SFX[name] && SFX[name](); } catch (e) { /* 소리 실패는 게임을 막지 않는다 */ }
+}
+
+// --- 배경음악 (16분음표 시퀀서)
+// 코드 진행 위에 베이스 · 아르페지오 · 드럼을 얹는다. 보스전은 조성과 템포가 바뀐다.
+const MUSIC = {
+  normal: { bpm: 138, chords: [[220, 261.63, 329.63], [174.61, 220, 261.63], [196, 246.94, 293.66], [164.81, 207.65, 246.94]] },
+  boss:   { bpm: 158, chords: [[146.83, 174.61, 220], [155.56, 196, 233.08], [138.59, 174.61, 207.65], [146.83, 185, 220]] },
+};
+
+const music = { on: false, mode: "normal", step: 0, nextTime: 0, timer: null };
+
+function scheduleStep(step, t) {
+  const cfg = MUSIC[music.mode];
+  const chord = cfg.chords[Math.floor(step / 16) % cfg.chords.length];
+  const s = step % 16;
+  const dest = musicGain;
+
+  // 베이스: 8분음표
+  if (s % 2 === 0) {
+    tone({ freq: chord[0] / 2, dur: 0.16, type: "triangle", vol: 0.18, time: t, dest });
+  }
+  // 아르페지오: 16분음표
+  const arp = chord[(s % 3)] * (s % 8 >= 4 ? 2 : 1);
+  tone({ freq: arp, dur: 0.1, type: "square", vol: 0.045, time: t, dest });
+
+  // 드럼
+  if (s % 8 === 0) noise({ freq: 160, freqTo: 50, dur: 0.16, vol: 0.22, time: t, dest });        // 킥
+  if (s % 8 === 4) noise({ freq: 2600, freqTo: 900, dur: 0.13, vol: 0.1, time: t, dest, filter: "highpass" }); // 스네어
+  if (s % 2 === 1) noise({ freq: 7000, dur: 0.03, vol: 0.05, time: t, dest, filter: "highpass" });             // 하이햇
+}
+
+function musicTick() {
+  if (!actx || !music.on) return;
+  const cfg = MUSIC[music.mode];
+  const stepDur = 60 / cfg.bpm / 4;
+  while (music.nextTime < actx.currentTime + 0.15) {
+    scheduleStep(music.step, music.nextTime);
+    music.step = (music.step + 1) % 64;
+    music.nextTime += stepDur;
+  }
+}
+
+function startMusic(mode = "normal") {
+  if (!initAudio()) return;
+  resumeAudio();
+  music.mode = mode;
+  if (music.on) return;
+  music.on = true;
+  music.step = 0;
+  music.nextTime = actx.currentTime + 0.08;
+  musicGain.gain.cancelScheduledValues(actx.currentTime);
+  musicGain.gain.setValueAtTime(0.0001, actx.currentTime);
+  musicGain.gain.linearRampToValueAtTime(0.34, actx.currentTime + 0.6);
+  clearInterval(music.timer);
+  music.timer = setInterval(musicTick, 25);
+  musicTick();
+}
+
+function stopMusic() {
+  if (!music.on) return;
+  music.on = false;
+  clearInterval(music.timer);
+  music.timer = null;
+  if (actx && musicGain) {
+    musicGain.gain.cancelScheduledValues(actx.currentTime);
+    musicGain.gain.setValueAtTime(musicGain.gain.value, actx.currentTime);
+    musicGain.gain.linearRampToValueAtTime(0.0001, actx.currentTime + 0.25);
+  }
+}
+
+/** 보스 등장·격파에 맞춰 곡을 바꾼다. */
+function setMusicMode(mode) {
+  if (music.mode === mode) return;
+  music.mode = mode;
+  music.step = 0;
+  if (actx && music.on) music.nextTime = Math.max(music.nextTime, actx.currentTime + 0.05);
+}
+
+function setSound(on) {
+  soundOn = on;
+  try { localStorage.setItem("af_sound", on ? "1" : "0"); } catch (e) {}
+  if (!actx) { if (on) initAudio(); }
+  if (actx && masterGain) {
+    masterGain.gain.cancelScheduledValues(actx.currentTime);
+    masterGain.gain.setValueAtTime(masterGain.gain.value, actx.currentTime);
+    masterGain.gain.linearRampToValueAtTime(on ? 1 : 0.0001, actx.currentTime + 0.15);
+    if (on) resumeAudio();
+  }
 }
 
 // ---------------------------------------------------------------- 게임 상태
@@ -329,7 +519,8 @@ function spawnBoss() {
     hp: 60 + lv * 40, maxHp: 60 + lv * 40,
     vx: 90 + lv * 8, fireCd: 1.2, pattern: 0, patternT: 0, hit: 0, entering: true,
   };
-  beep(90, 0.5, "sawtooth", 0.07);
+  sfx("bossWarn");
+  setMusicMode("boss");
 }
 
 // ---------------------------------------------------------------- 발사
@@ -340,7 +531,7 @@ function playerShoot() {
   else if (p === 2) { shoot(0, -9); shoot(0, 9); }
   else if (p === 3) { shoot(0, -11); shoot(0, 11); shoot(0, 0); }
   else { shoot(0, -13); shoot(0, 13); shoot(-140, -6); shoot(140, 6); }
-  beep(880, 0.04, "square", 0.025);
+  sfx("shoot");
 }
 
 function useBomb() {
@@ -348,7 +539,7 @@ function useBomb() {
   player.bombs--;
   game.bombFlash = 1;
   game.shake = 16;
-  beep(120, 0.4, "sawtooth", 0.08);
+  sfx("bombUse");
   game.ebullets.length = 0;
   for (const e of game.enemies) {
     burst(e.x, e.y, e.color, 16);
@@ -367,10 +558,10 @@ function maybeDropItem(x, y) {
 }
 
 function pickItem(it) {
-  if (it.kind === "heal") { player.hp = Math.min(player.maxHp, player.hp + 1); beep(660, 0.15, "sine", 0.06); }
-  else if (it.kind === "power") { player.power = Math.min(4, player.power + 1); beep(990, 0.15, "sine", 0.06); }
-  else if (it.kind === "bomb") { player.bombs = Math.min(5, player.bombs + 1); beep(420, 0.18, "triangle", 0.06); }
-  else { player.shield = 6; beep(520, 0.2, "sine", 0.06); }
+  if (it.kind === "heal") { player.hp = Math.min(player.maxHp, player.hp + 1); sfx("heal"); }
+  else if (it.kind === "power") { player.power = Math.min(4, player.power + 1); sfx("power"); }
+  else if (it.kind === "bomb") { player.bombs = Math.min(5, player.bombs + 1); sfx("bombGet"); }
+  else { player.shield = 6; sfx("shield"); }
   burst(it.x, it.y, "#fff", 10, 150);
 }
 
@@ -381,14 +572,14 @@ function damagePlayer(amount) {
     player.shield = 0;
     player.inv = 60;
     burst(player.x, player.y, "#ffe066", 20, 260);
-    beep(300, 0.2, "triangle", 0.06);
+    sfx("guard");
     return;
   }
   player.hp -= amount;
   player.inv = 90;
   game.shake = 12;
   burst(player.x, player.y, "#ff9d5c", 18, 240);
-  beep(180, 0.25, "sawtooth", 0.07);
+  sfx("damage");
   if (player.hp <= 0) {
     player.hp = 0; player.alive = false;
     burst(player.x, player.y, "#ffd166", 50, 420);
@@ -400,7 +591,7 @@ function damagePlayer(amount) {
 function update(dt) {
   game.time += dt;
   const newLevel = 1 + Math.floor(game.score / 800);
-  if (newLevel > game.level) { game.level = newLevel; beep(1200, 0.2, "sine", 0.05); }
+  if (newLevel > game.level) { game.level = newLevel; sfx("levelUp"); }
 
   // 별
   for (const s of game.stars) {
@@ -495,7 +686,7 @@ function update(dt) {
           game.score += e.score;
           burst(e.x, e.y, e.color, 18, 260);
           maybeDropItem(e.x, e.y);
-          beep(320, 0.12, "square", 0.045);
+          sfx("boom");
           game.enemies.splice(i, 1);
           dead = true;
           break;
@@ -549,7 +740,7 @@ function update(dt) {
           }
           boss.fireCd = 1.4;
         }
-        beep(140, 0.1, "sawtooth", 0.04);
+        sfx("enemyFire");
       }
     }
     if (boss.hit > 0) boss.hit -= dt;
@@ -572,7 +763,8 @@ function update(dt) {
       for (let k = 0; k < 5; k++) {
         setTimeout(() => burst(boss.x + rand(-40, 40), boss.y + rand(-30, 30), "#ffd166", 24, 340), k * 90);
       }
-      beep(200, 0.6, "sawtooth", 0.08);
+      sfx("bigBoom");
+      setMusicMode("normal");
       game.items.push({ x: boss.x, y: boss.y, r: 13, vy: 80, kind: "power", t: 0 });
       game.items.push({ x: boss.x - 40, y: boss.y, r: 13, vy: 80, kind: "heal", t: 0 });
       player.bombs = Math.min(5, player.bombs + 1);
@@ -736,10 +928,10 @@ function drawHUD() {
   ctx.fillStyle = "#ffd76a";
   ctx.font = "bold 20px sans-serif";
   ctx.textAlign = "right";
-  ctx.fillText(String(game.score), W - 70, top);
+  ctx.fillText(String(game.score), W - 118, top);
   ctx.fillStyle = "#9fb6d9";
   ctx.font = "bold 12px sans-serif";
-  ctx.fillText("LV " + game.level, W - 70, top + 20);
+  ctx.fillText("LV " + game.level, W - 118, top + 20);
 
   // 보호막 표시
   if (player.shield > 0) {
@@ -1035,7 +1227,7 @@ async function submitScore() {
 
   addRank(name, score, lv);                  // 기기에도 항상 남긴다
   nameEntry.classList.add("hidden");
-  beep(880, 0.18, "sine", 0.06);
+  sfx("save");
 
   if (!SHARED) {
     board = loadRanks();
@@ -1070,15 +1262,18 @@ function startGame() {
   pauseScreen.classList.add("hidden");
   pauseBtn.classList.remove("hidden");
   last = performance.now();
-  beep(700, 0.12, "sine", 0.05);
+  resumeAudio();
+  sfx("start");
+  startMusic(game.boss ? "boss" : "normal");
 }
 
 function togglePause(on) {
-  if (on) { state = STATE.PAUSE; pauseScreen.classList.remove("hidden"); }
-  else { state = STATE.PLAY; pauseScreen.classList.add("hidden"); last = performance.now(); }
+  if (on) { state = STATE.PAUSE; pauseScreen.classList.remove("hidden"); stopMusic(); }
+  else { state = STATE.PLAY; pauseScreen.classList.add("hidden"); last = performance.now(); startMusic(music.mode); }
 }
 
 function goHome() {
+  stopMusic();
   if (pendingScore) submitScore();
   state = STATE.START;
   pauseScreen.classList.add("hidden");
@@ -1091,6 +1286,8 @@ function goHome() {
 function gameOver() {
   state = STATE.OVER;
   pauseBtn.classList.add("hidden");
+  stopMusic();
+  sfx("gameOver");
   const best = bestScore();
   const isNew = game.score > best;
 
@@ -1133,6 +1330,18 @@ window.addEventListener("resize", () => {
 });
 updateBombBtnPos();
 refreshBoard(rankHome);
+
+const soundBtn = document.getElementById("soundBtn");
+function paintSoundBtn() {
+  soundBtn.textContent = soundOn ? "🔊" : "🔇";
+  soundBtn.classList.toggle("off", !soundOn);
+}
+soundBtn.addEventListener("click", () => {
+  setSound(!soundOn);
+  paintSoundBtn();
+  if (soundOn && state === STATE.PLAY) startMusic(music.mode);
+});
+paintSoundBtn();
 
 })();
 </script>
