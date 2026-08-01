@@ -560,7 +560,11 @@ function maybeDropItem(x, y) {
 function pickItem(it) {
   if (it.kind === "heal") { player.hp = Math.min(player.maxHp, player.hp + 1); sfx("heal"); }
   else if (it.kind === "power") { player.power = Math.min(4, player.power + 1); sfx("power"); }
-  else if (it.kind === "bomb") { player.bombs = Math.min(5, player.bombs + 1); sfx("bombGet"); }
+  else if (it.kind === "bomb") {
+    if (player.bombs < 5) player.bombs++;
+    else game.score += 100;          // 이미 가득이면 헛되지 않게 점수로
+    sfx("bombGet");
+  }
   else { player.shield = 6; sfx("shield"); }
   burst(it.x, it.y, "#fff", 10, 150);
 }
@@ -1064,15 +1068,24 @@ const nameInput = document.getElementById("nameInput");
 const rankOver  = document.getElementById("rankOver");
 const rankHome  = document.getElementById("rankHome");
 
+// 이름당 최고 기록 하나만 남긴다. 한 사람이 순위표를 독식하지 않도록.
+function bestPerName(list) {
+  const byName = new Map();
+  for (const r of list) {
+    const prev = byName.get(r.n);
+    if (!prev || r.s > prev.s) byName.set(r.n, r);
+  }
+  return [...byName.values()].sort((a, b) => b.s - a.s);
+}
+
 function loadRanks() {
   try {
     const raw = JSON.parse(localStorage.getItem("af_ranks") || "[]");
     if (!Array.isArray(raw)) return [];
-    return raw
+    const cleaned = raw
       .filter(r => r && typeof r.s === "number")
-      .map(r => ({ n: String(r.n || "무명").slice(0, 6), s: r.s | 0, lv: r.lv | 0 }))
-      .sort((a, b) => b.s - a.s)
-      .slice(0, RANK_MAX);
+      .map(r => ({ n: String(r.n || "무명").slice(0, 6), s: r.s | 0, lv: r.lv | 0 }));
+    return bestPerName(cleaned).slice(0, RANK_MAX);
   } catch (e) { return []; }
 }
 function storeRanks(list) {
@@ -1090,11 +1103,10 @@ let boardOffline = false;      // 공유 모드인데 서버에 닿지 못한 �
 let boardLoading = SHARED;
 
 function normalize(list) {
-  return (Array.isArray(list) ? list : [])
+  const cleaned = (Array.isArray(list) ? list : [])
     .filter(r => r && typeof r.s === "number" && Number.isFinite(r.s))
-    .map(r => ({ n: String(r.n || "무명").slice(0, 6), s: Math.trunc(r.s), lv: Math.trunc(r.lv) || 1 }))
-    .sort((a, b) => b.s - a.s)
-    .slice(0, RANK_MAX);
+    .map(r => ({ n: String(r.n || "무명").slice(0, 6), s: Math.trunc(r.s), lv: Math.trunc(r.lv) || 1 }));
+  return bestPerName(cleaned).slice(0, RANK_MAX);
 }
 
 async function apiGet() {
@@ -1142,17 +1154,15 @@ function addRank(name, score, lv) {
   const entry = { n: name, s: score, lv };
   const list = loadRanks();
   list.push(entry);
-  list.sort((a, b) => b.s - a.s);
-  const idx = list.indexOf(entry);
-  const cut = list.slice(0, RANK_MAX);
+  const cut = bestPerName(list).slice(0, RANK_MAX);
   storeRanks(cut);
-  return idx < RANK_MAX ? idx : -1;
+  return cut.indexOf(entry);
 }
 
 // me: 방금 등록한 기록 {n, s} — 목록에서 찾아 강조한다.
 function renderRank(el, me) {
   const list = board.slice(0, RANK_SHOW);
-  const meIdx = me ? list.findIndex(r => r.n === me.n && r.s === me.s) : -1;
+  const meIdx = me ? list.findIndex(r => r.n === me.n) : -1;
 
   el.textContent = "";
   el.classList.remove("hidden");
@@ -1283,33 +1293,40 @@ function goHome() {
   refreshBoard(rankHome);
 }
 
-function gameOver() {
+async function gameOver() {
+  const score = game.score, lv = game.level;
   state = STATE.OVER;
   pauseBtn.classList.add("hidden");
   stopMusic();
   sfx("gameOver");
-  const best = bestScore();
-  const isNew = game.score > best;
 
-  document.getElementById("finalScore").textContent = game.score.toLocaleString("ko-KR");
-  document.getElementById("overTitle").textContent = isNew ? "신기록 달성! 🎉" : "격추당했어요!";
-  document.getElementById("overSub").textContent =
-    (isNew ? "역대 최고 점수예요!" : "최고 점수 " + Math.max(best, game.score).toLocaleString("ko-KR"))
-    + " · 레벨 " + game.level;
-
-  if (qualifies(game.score)) {
-    pendingScore = { score: game.score, lv: game.level };
-    try { nameInput.value = localStorage.getItem("af_name") || ""; } catch (e) { nameInput.value = ""; }
-    nameEntry.classList.remove("hidden");
-    rankOver.classList.add("hidden");
-  } else {
-    pendingScore = null;
-    nameEntry.classList.add("hidden");
-    renderRank(rankOver, null);
-  }
+  document.getElementById("finalScore").textContent = score.toLocaleString("ko-KR");
+  document.getElementById("overTitle").textContent = "격추당했어요!";
+  document.getElementById("overSub").textContent = "레벨 " + lv;
+  pendingScore = null;
+  nameEntry.classList.add("hidden");
+  renderRank(rankOver, null);
 
   overScreen.classList.remove("hidden");
   overScreen.classList.remove("fade"); void overScreen.offsetWidth; overScreen.classList.add("fade");
+
+  // 순위 판정은 최신 목록으로 한다. 그 사이 가족이 세운 기록도 반영되도록.
+  await refreshBoard(rankOver);
+  if (state !== STATE.OVER) return;      // 그새 다시 시작했으면 건드리지 않는다
+
+  const best = bestScore();
+  const isNew = score > best;
+  document.getElementById("overTitle").textContent = isNew ? "신기록 달성! 🎉" : "격추당했어요!";
+  document.getElementById("overSub").textContent =
+    (isNew ? "역대 최고 점수예요!" : "최고 점수 " + Math.max(best, score).toLocaleString("ko-KR"))
+    + " · 레벨 " + lv;
+
+  if (qualifies(score)) {
+    pendingScore = { score, lv };
+    try { nameInput.value = localStorage.getItem("af_name") || ""; } catch (e) { nameInput.value = ""; }
+    nameEntry.classList.remove("hidden");
+    rankOver.classList.add("hidden");
+  }
 }
 
 document.getElementById("startBtn").addEventListener("click", startGame);
