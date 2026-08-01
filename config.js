@@ -5,4 +5,4 @@
 // 예) window.AIR_FIGHT_API = "https://air-fight-scores.내계정.workers.dev";
 //
 // 비워두면 순위표는 기기별로 따로 저장됩니다.
-window.AIR_FIGHT_API = "";
+window.AIR_FIGHT_API = "https://air-fight-scores.dream-ccm.workers.dev";
