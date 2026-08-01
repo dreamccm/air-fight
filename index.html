@@ -149,6 +149,7 @@
   </div>
 </div>
 
+<script src="config.js"></script>
 <script>
 (() => {
 "use strict";
@@ -885,13 +886,63 @@ function loadRanks() {
 function storeRanks(list) {
   try { localStorage.setItem("af_ranks", JSON.stringify(list)); } catch (e) {}
 }
-function bestScore() { const r = loadRanks(); return r.length ? r[0].s : 0; }
+// --- 공유 순위표 서버 (config.js 에서 주소를 지정하면 켜진다)
+const API = String(
+  new URLSearchParams(location.search).get("api") || window.AIR_FIGHT_API || ""
+).replace(/\/+$/, "");
+const SHARED = /^https?:\/\//.test(API);
+
+// 화면에 그릴 목록. 공유 모드에서는 서버 기록, 아니면 이 기기의 기록.
+let board = loadRanks();
+let boardOffline = false;      // 공유 모드인데 서버에 닿지 못한 상태
+let boardLoading = SHARED;
+
+function normalize(list) {
+  return (Array.isArray(list) ? list : [])
+    .filter(r => r && typeof r.s === "number" && Number.isFinite(r.s))
+    .map(r => ({ n: String(r.n || "무명").slice(0, 6), s: Math.trunc(r.s), lv: Math.trunc(r.lv) || 1 }))
+    .sort((a, b) => b.s - a.s)
+    .slice(0, RANK_MAX);
+}
+
+async function apiGet() {
+  const res = await fetch(API + "/scores", { cache: "no-store" });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return normalize((await res.json()).scores);
+}
+
+async function apiPost(name, score, level) {
+  const res = await fetch(API + "/scores", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, score, level }),
+  });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return normalize((await res.json()).scores);
+}
+
+// 서버 기록을 다시 받아온다. 실패하면 이 기기 기록으로 대신 보여준다.
+async function refreshBoard(el) {
+  if (!SHARED) { board = loadRanks(); if (el) renderRank(el, null); return; }
+  boardLoading = true;
+  if (el) renderRank(el, null);
+  try {
+    board = await apiGet();
+    boardOffline = false;
+  } catch (e) {
+    board = loadRanks();
+    boardOffline = true;
+  }
+  boardLoading = false;
+  if (el) renderRank(el, null);
+}
+
+function bestScore() { return board.length ? board[0].s : 0; }
 
 // 순위표에 오를 만한 점수인지
 function qualifies(score) {
   if (score <= 0) return false;
-  const r = loadRanks();
-  return r.length < RANK_MAX || score > r[r.length - 1].s;
+  return board.length < RANK_MAX || score > board[board.length - 1].s;
 }
 
 // 새 기록을 넣고, 그 기록의 순위(0부터)를 돌려준다. 밀려나면 -1.
@@ -906,21 +957,41 @@ function addRank(name, score, lv) {
   return idx < RANK_MAX ? idx : -1;
 }
 
-function renderRank(el, meIdx) {
-  const list = loadRanks().slice(0, RANK_SHOW);
+// me: 방금 등록한 기록 {n, s} — 목록에서 찾아 강조한다.
+function renderRank(el, me) {
+  const list = board.slice(0, RANK_SHOW);
+  const meIdx = me ? list.findIndex(r => r.n === me.n && r.s === me.s) : -1;
+
   el.textContent = "";
   el.classList.remove("hidden");
 
   const title = document.createElement("div");
   title.className = "rank-title";
-  title.textContent = "🏆 순위표";
+  title.textContent = SHARED ? "🏆 우리 가족 순위표" : "🏆 순위표";
   el.appendChild(title);
+
+  if (boardLoading) {
+    const wait = document.createElement("div");
+    wait.className = "rank-empty";
+    wait.textContent = "불러오는 중…";
+    el.appendChild(wait);
+    return;
+  }
+
+  const offlineNote = () => {
+    if (!boardOffline) return;
+    const note = document.createElement("div");
+    note.className = "rank-empty";
+    note.textContent = "서버에 연결하지 못해 이 기기 기록만 보여요";
+    el.appendChild(note);
+  };
 
   if (!list.length) {
     const empty = document.createElement("div");
     empty.className = "rank-empty";
     empty.textContent = "아직 기록이 없어요. 첫 주인공이 되어 보세요!";
     el.appendChild(empty);
+    offlineNote();
     return;
   }
 
@@ -943,6 +1014,8 @@ function renderRank(el, meIdx) {
     row.append(pos, nm, sc);
     el.appendChild(row);
   });
+
+  offlineNote();
 }
 
 function cleanName(v) {
@@ -951,19 +1024,39 @@ function cleanName(v) {
 }
 
 let pendingScore = null;   // 아직 이름을 안 남긴 기록
+const saveBtn = document.getElementById("saveScoreBtn");
 
-function submitScore() {
+async function submitScore() {
   if (!pendingScore) return;
+  const { score, lv } = pendingScore;
   const name = cleanName(nameInput.value);
+  pendingScore = null;                       // 두 번 등록되지 않게 먼저 비운다
   try { localStorage.setItem("af_name", name); } catch (e) {}
-  const idx = addRank(name, pendingScore.score, pendingScore.lv);
-  pendingScore = null;
+
+  addRank(name, score, lv);                  // 기기에도 항상 남긴다
   nameEntry.classList.add("hidden");
-  renderRank(rankOver, idx);
   beep(880, 0.18, "sine", 0.06);
+
+  if (!SHARED) {
+    board = loadRanks();
+    renderRank(rankOver, { n: name, s: score });
+    return;
+  }
+
+  boardLoading = true;
+  renderRank(rankOver, null);
+  try {
+    board = await apiPost(name, score, lv);
+    boardOffline = false;
+  } catch (e) {
+    board = loadRanks();                     // 서버가 안 되면 기기 기록으로 보여준다
+    boardOffline = true;
+  }
+  boardLoading = false;
+  renderRank(rankOver, { n: name, s: score });
 }
 
-document.getElementById("saveScoreBtn").addEventListener("click", submitScore);
+saveBtn.addEventListener("click", submitScore);
 nameInput.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); submitScore(); } });
 
 function startGame() {
@@ -992,7 +1085,7 @@ function goHome() {
   overScreen.classList.add("hidden");
   startScreen.classList.remove("hidden");
   pauseBtn.classList.add("hidden");
-  renderRank(rankHome, -1);
+  refreshBoard(rankHome);
 }
 
 function gameOver() {
@@ -1015,7 +1108,7 @@ function gameOver() {
   } else {
     pendingScore = null;
     nameEntry.classList.add("hidden");
-    renderRank(rankOver, -1);
+    renderRank(rankOver, null);
   }
 
   overScreen.classList.remove("hidden");
@@ -1039,7 +1132,7 @@ window.addEventListener("resize", () => {
   targetY = clamp(targetY, player.r + 60, H - player.r - 20);
 });
 updateBombBtnPos();
-renderRank(rankHome, -1);
+refreshBoard(rankHome);
 
 })();
 </script>

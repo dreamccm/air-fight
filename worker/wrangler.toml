@@ -1,0 +1,8 @@
+name = "air-fight-scores"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# 아래 id 는 `npx wrangler kv namespace create SCORES` 실행 후 출력되는 값으로 바꿔주세요.
+[[kv_namespaces]]
+binding = "SCORES"
+id = "여기에_KV_네임스페이스_ID"
