@@ -5,12 +5,21 @@
 
 ## 배포하기 (약 5분)
 
+> 아래 명령은 **Node.js가 설치된 PC의 터미널**에서 실행합니다. 휴대폰이나
+> GitHub 웹페이지에서는 할 수 없습니다.
+
 1. [dash.cloudflare.com](https://dash.cloudflare.com) 에서 무료 계정을 만듭니다.
 
-2. 이 폴더에서 KV 저장소를 만듭니다.
+2. 저장소를 PC에 내려받고 **`air-fight/worker` 폴더**로 들어갑니다.
 
    ```bash
-   cd worker
+   git clone https://github.com/dreamccm/air-fight.git
+   cd air-fight/worker
+   ```
+
+3. KV 저장소를 만듭니다.
+
+   ```bash
    npx wrangler login          # 브라우저가 열리면 로그인 허용
    npx wrangler kv namespace create SCORES
    ```
@@ -18,7 +27,7 @@
    출력에 나오는 `id = "..."` 값을 복사해 `wrangler.toml` 의
    `id = "여기에_KV_네임스페이스_ID"` 자리에 붙여넣습니다.
 
-3. 배포합니다.
+4. 배포합니다.
 
    ```bash
    npx wrangler deploy
@@ -26,7 +35,7 @@
 
    `https://air-fight-scores.<계정이름>.workers.dev` 같은 주소가 출력됩니다.
 
-4. 저장소 루트의 `config.js` 를 열어 그 주소를 넣고 커밋 & 푸시하면 끝입니다.
+5. 저장소 루트의 `config.js` 를 열어 그 주소를 넣고 커밋 & 푸시하면 끝입니다.
 
    ```js
    window.AIR_FIGHT_API = "https://air-fight-scores.내계정.workers.dev";
