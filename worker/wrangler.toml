@@ -5,4 +5,4 @@ compatibility_date = "2025-01-01"
 # 아래 id 는 `npx wrangler kv namespace create SCORES` 실행 후 출력되는 값으로 바꿔주세요.
 [[kv_namespaces]]
 binding = "SCORES"
-id = "여기에_KV_네임스페이스_ID"
+id = "b2928e1a47a348d08394ec15b45c74e5"
