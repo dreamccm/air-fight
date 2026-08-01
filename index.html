@@ -20,9 +20,11 @@
 
   .screen {
     position:absolute; inset:0; display:flex; flex-direction:column;
-    align-items:center; justify-content:center; gap:18px;
+    align-items:center; gap:18px;
+    justify-content:center; justify-content:safe center;
     background:radial-gradient(circle at 50% 35%, rgba(30,60,140,.75), rgba(5,8,26,.96) 70%);
     padding:24px; text-align:center; z-index:10;
+    overflow-y:auto; -webkit-overflow-scrolling:touch;
   }
   .screen.hidden { display:none; }
   .title {
@@ -52,6 +54,42 @@
   }
   .big-score { font-size:clamp(34px,10vw,52px); font-weight:900; color:#ffd76a; }
   .row { display:flex; gap:12px; flex-wrap:wrap; justify-content:center; }
+  .entry { display:flex; flex-direction:column; align-items:center; gap:10px; }
+  .entry.hidden, .rank.hidden { display:none; }
+  .entry-row { display:flex; gap:8px; align-items:center; }
+  #nameInput {
+    width:150px; padding:12px 14px; border-radius:12px;
+    border:2px solid rgba(120,180,255,.45); background:rgba(8,16,38,.9);
+    color:#fff; font-size:17px; font-weight:700; text-align:center;
+    font-family:inherit;
+  }
+  #nameInput:focus { outline:none; border-color:#7dd3ff; box-shadow:0 0 0 3px rgba(125,211,255,.22); }
+  #nameInput::placeholder { color:#5f769b; font-weight:500; }
+  .btn.small { padding:12px 22px; font-size:16px; box-shadow:0 5px 0 #14508f; }
+  .btn.small:active { box-shadow:0 1px 0 #14508f; }
+
+  .rank {
+    display:flex; flex-direction:column; gap:2px; width:min(340px,86vw);
+    background:rgba(10,20,45,.7); border:1px solid rgba(120,180,255,.25);
+    border-radius:16px; padding:12px 14px;
+  }
+  .rank-title {
+    font-size:12px; font-weight:800; letter-spacing:2px; color:#8fa8cc;
+    text-align:center; padding-bottom:6px;
+  }
+  .rank-row {
+    display:grid; grid-template-columns:28px 1fr auto; align-items:center;
+    gap:8px; padding:6px 8px; border-radius:8px; font-size:15px; color:#cfe0f7;
+  }
+  .rank-row .pos { font-weight:800; color:#7f9ac0; text-align:center; }
+  .rank-row .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left; }
+  .rank-row .sc { font-weight:800; color:#ffd76a; font-variant-numeric:tabular-nums; }
+  .rank-row.me { background:rgba(125,211,255,.16); box-shadow:inset 0 0 0 1px rgba(125,211,255,.4); }
+  .rank-row.top1 .pos { color:#ffd700; }
+  .rank-row.top2 .pos { color:#c7d2de; }
+  .rank-row.top3 .pos { color:#e0a56a; }
+  .rank-empty { font-size:13px; color:#7f93b3; text-align:center; padding:6px 0; }
+
   #pauseBtn {
     position:absolute; top:calc(10px + env(safe-area-inset-top)); right:12px; z-index:5;
     width:44px; height:44px; border-radius:12px; border:none;
@@ -76,9 +114,10 @@
       💊 <b>초록 아이템</b> — 체력 회복<br>
       ⚡ <b>파란 아이템</b> — 총알 강화<br>
       🛡️ <b>노란 아이템</b> — 보호막<br>
+      💣 <b>분홍 아이템</b> — 폭탄 １개<br>
       💥 <b>폭탄 버튼</b> — 화면 전체 공격
     </div>
-    <div class="sub" id="bestLine"></div>
+    <div id="rankHome" class="rank hidden"></div>
   </div>
 
   <div id="pauseScreen" class="screen hidden">
@@ -91,6 +130,18 @@
     <div class="title" id="overTitle" style="font-size:clamp(28px,8vw,44px)">격추당했어요!</div>
     <div class="big-score" id="finalScore">0</div>
     <div class="sub" id="overSub"></div>
+
+    <div id="nameEntry" class="entry hidden">
+      <div class="sub">순위표에 이름을 남겨요! 🏅</div>
+      <div class="entry-row">
+        <input id="nameInput" type="text" maxlength="6" placeholder="이름" autocomplete="off"
+               autocapitalize="off" autocorrect="off" spellcheck="false">
+        <button id="saveScoreBtn" class="btn small">등록</button>
+      </div>
+    </div>
+
+    <div id="rankOver" class="rank hidden"></div>
+
     <div class="row">
       <button id="retryBtn" class="btn">다시 하기</button>
       <button id="homeBtn" class="btn ghost">처음으로</button>
@@ -307,7 +358,7 @@ function useBomb() {
 }
 
 // ---------------------------------------------------------------- 아이템
-const ITEM_KIND = ["heal", "power", "shield"];
+const ITEM_KIND = ["heal", "power", "shield", "bomb"];
 function maybeDropItem(x, y) {
   if (Math.random() > 0.16) return;
   const kind = ITEM_KIND[Math.floor(Math.random() * ITEM_KIND.length)];
@@ -317,6 +368,7 @@ function maybeDropItem(x, y) {
 function pickItem(it) {
   if (it.kind === "heal") { player.hp = Math.min(player.maxHp, player.hp + 1); beep(660, 0.15, "sine", 0.06); }
   else if (it.kind === "power") { player.power = Math.min(4, player.power + 1); beep(990, 0.15, "sine", 0.06); }
+  else if (it.kind === "bomb") { player.bombs = Math.min(5, player.bombs + 1); beep(420, 0.18, "triangle", 0.06); }
   else { player.shield = 6; beep(520, 0.2, "sine", 0.06); }
   burst(it.x, it.y, "#fff", 10, 150);
 }
@@ -657,6 +709,7 @@ const ITEM_STYLE = {
   heal:   { c: "#4ade80", label: "＋" },
   power:  { c: "#60a5fa", label: "⚡" },
   shield: { c: "#fbbf24", label: "🛡" },
+  bomb:   { c: "#f472b6", label: "💣" },
 };
 
 function drawHUD() {
@@ -811,16 +864,111 @@ const pauseScreen = document.getElementById("pauseScreen");
 const overScreen  = document.getElementById("overScreen");
 const pauseBtn    = document.getElementById("pauseBtn");
 
-function bestScore() { try { return +(localStorage.getItem("af_best") || 0); } catch (e) { return 0; } }
-function saveBest(v) { try { localStorage.setItem("af_best", String(v)); } catch (e) {} }
+// ---------------------------------------------------------------- 순위표
+const RANK_MAX = 10, RANK_SHOW = 5;
+const nameEntry = document.getElementById("nameEntry");
+const nameInput = document.getElementById("nameInput");
+const rankOver  = document.getElementById("rankOver");
+const rankHome  = document.getElementById("rankHome");
 
-function refreshBest() {
-  const b = bestScore();
-  document.getElementById("bestLine").textContent = b > 0 ? "🏆 최고 점수 " + b : "";
+function loadRanks() {
+  try {
+    const raw = JSON.parse(localStorage.getItem("af_ranks") || "[]");
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter(r => r && typeof r.s === "number")
+      .map(r => ({ n: String(r.n || "무명").slice(0, 6), s: r.s | 0, lv: r.lv | 0 }))
+      .sort((a, b) => b.s - a.s)
+      .slice(0, RANK_MAX);
+  } catch (e) { return []; }
 }
-refreshBest();
+function storeRanks(list) {
+  try { localStorage.setItem("af_ranks", JSON.stringify(list)); } catch (e) {}
+}
+function bestScore() { const r = loadRanks(); return r.length ? r[0].s : 0; }
+
+// 순위표에 오를 만한 점수인지
+function qualifies(score) {
+  if (score <= 0) return false;
+  const r = loadRanks();
+  return r.length < RANK_MAX || score > r[r.length - 1].s;
+}
+
+// 새 기록을 넣고, 그 기록의 순위(0부터)를 돌려준다. 밀려나면 -1.
+function addRank(name, score, lv) {
+  const entry = { n: name, s: score, lv };
+  const list = loadRanks();
+  list.push(entry);
+  list.sort((a, b) => b.s - a.s);
+  const idx = list.indexOf(entry);
+  const cut = list.slice(0, RANK_MAX);
+  storeRanks(cut);
+  return idx < RANK_MAX ? idx : -1;
+}
+
+function renderRank(el, meIdx) {
+  const list = loadRanks().slice(0, RANK_SHOW);
+  el.textContent = "";
+  el.classList.remove("hidden");
+
+  const title = document.createElement("div");
+  title.className = "rank-title";
+  title.textContent = "🏆 순위표";
+  el.appendChild(title);
+
+  if (!list.length) {
+    const empty = document.createElement("div");
+    empty.className = "rank-empty";
+    empty.textContent = "아직 기록이 없어요. 첫 주인공이 되어 보세요!";
+    el.appendChild(empty);
+    return;
+  }
+
+  list.forEach((r, i) => {
+    const row = document.createElement("div");
+    row.className = "rank-row" + (i === meIdx ? " me" : "") + (i < 3 ? " top" + (i + 1) : "");
+
+    const pos = document.createElement("span");
+    pos.className = "pos";
+    pos.textContent = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : String(i + 1);
+
+    const nm = document.createElement("span");
+    nm.className = "nm";
+    nm.textContent = r.n;               // textContent 로만 넣어 입력값을 그대로 표시
+
+    const sc = document.createElement("span");
+    sc.className = "sc";
+    sc.textContent = r.s.toLocaleString("ko-KR");
+
+    row.append(pos, nm, sc);
+    el.appendChild(row);
+  });
+}
+
+function cleanName(v) {
+  const t = (v || "").replace(/\s+/g, " ").trim().slice(0, 6);
+  return t || "무명";
+}
+
+let pendingScore = null;   // 아직 이름을 안 남긴 기록
+
+function submitScore() {
+  if (!pendingScore) return;
+  const name = cleanName(nameInput.value);
+  try { localStorage.setItem("af_name", name); } catch (e) {}
+  const idx = addRank(name, pendingScore.score, pendingScore.lv);
+  pendingScore = null;
+  nameEntry.classList.add("hidden");
+  renderRank(rankOver, idx);
+  beep(880, 0.18, "sine", 0.06);
+}
+
+document.getElementById("saveScoreBtn").addEventListener("click", submitScore);
+nameInput.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); submitScore(); } });
 
 function startGame() {
+  if (pendingScore) submitScore();   // 이름을 안 남기고 넘어가도 기록은 지킨다
+  nameEntry.classList.add("hidden");
   updateBombBtnPos();
   resetGame();
   state = STATE.PLAY;
@@ -838,12 +986,13 @@ function togglePause(on) {
 }
 
 function goHome() {
+  if (pendingScore) submitScore();
   state = STATE.START;
   pauseScreen.classList.add("hidden");
   overScreen.classList.add("hidden");
   startScreen.classList.remove("hidden");
   pauseBtn.classList.add("hidden");
-  refreshBest();
+  renderRank(rankHome, -1);
 }
 
 function gameOver() {
@@ -851,11 +1000,24 @@ function gameOver() {
   pauseBtn.classList.add("hidden");
   const best = bestScore();
   const isNew = game.score > best;
-  if (isNew) saveBest(game.score);
-  document.getElementById("finalScore").textContent = game.score;
+
+  document.getElementById("finalScore").textContent = game.score.toLocaleString("ko-KR");
   document.getElementById("overTitle").textContent = isNew ? "신기록 달성! 🎉" : "격추당했어요!";
   document.getElementById("overSub").textContent =
-    (isNew ? "역대 최고 점수예요!" : "최고 점수 " + Math.max(best, game.score)) + " · 레벨 " + game.level;
+    (isNew ? "역대 최고 점수예요!" : "최고 점수 " + Math.max(best, game.score).toLocaleString("ko-KR"))
+    + " · 레벨 " + game.level;
+
+  if (qualifies(game.score)) {
+    pendingScore = { score: game.score, lv: game.level };
+    try { nameInput.value = localStorage.getItem("af_name") || ""; } catch (e) { nameInput.value = ""; }
+    nameEntry.classList.remove("hidden");
+    rankOver.classList.add("hidden");
+  } else {
+    pendingScore = null;
+    nameEntry.classList.add("hidden");
+    renderRank(rankOver, -1);
+  }
+
   overScreen.classList.remove("hidden");
   overScreen.classList.remove("fade"); void overScreen.offsetWidth; overScreen.classList.add("fade");
 }
@@ -877,6 +1039,7 @@ window.addEventListener("resize", () => {
   targetY = clamp(targetY, player.r + 60, H - player.r - 20);
 });
 updateBombBtnPos();
+renderRank(rankHome, -1);
 
 })();
 </script>
