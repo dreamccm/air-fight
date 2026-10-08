@@ -83,6 +83,11 @@ window.AIR_FIGHT_API = "https://air-fight-scores.내계정.workers.dev";
 - 🔊 버튼으로 언제든 끄고 켤 수 있으며 설정이 저장됩니다. 일시정지하면 음악도 멈춥니다.
 - 브라우저 정책상 소리는 「게임 시작」을 누른 뒤부터 납니다.
 
+## 코드를 이어받아 발전시키려면
+
+구조·확장 포인트·지켜야 할 제약은 [HANDOFF.md](HANDOFF.md) 에 정리해 두었습니다.
+다른 작업 창이나 다른 사람에게 넘길 때 그 문서부터 읽히면 됩니다.
+
 ## 기술
 
 의존성 없는 순수 HTML + Canvas + JavaScript.
